@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":[["SignatureVar","Signature variable"],["VerKeyVar","Signature verification key variable"]],"trait":[["SignatureGadget","Plonk circuit gadget for EdDSA signatures."]]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":[["bls","BLS Signature Scheme"],["schnorr","This module implements the Schnorr signature over the various Edwards curves."]],"trait":[["AggregateableSignatureSchemes","Trait for aggregatable signatures."],["SignatureScheme","Trait definition for a signature scheme."]]};
