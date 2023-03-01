@@ -30,10 +30,7 @@ use ark_std::{
     vec,
     vec::Vec,
 };
-use jf_primitives::{
-    pcs::{prelude::UnivariateKzgPCS, PolynomialCommitmentScheme, StructuredReferenceString},
-    rescue::RescueParameter,
-};
+use jf_primitives::{pcs::PolynomialCommitmentScheme, rescue::RescueParameter};
 use jf_relation::{
     constants::compute_coset_representatives, gadgets::ecc::SWToTEConParam, Arithmetization,
 };
@@ -41,14 +38,15 @@ use jf_utils::par_utils::parallelizable_slice_iter;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-/// A Plonk instantiated with KZG PCS
-pub struct PlonkKzgSnark<E: PairingEngine>(PhantomData<E>);
+/// A Plonk instantiated with a KZG PCS variant
+pub struct PlonkKzgSnark<E: PairingEngine, S: PolynomialCommitmentScheme<E>>(PhantomData<(E, S)>);
 
-impl<E, F, P> PlonkKzgSnark<E>
+impl<E, F, P, S> PlonkKzgSnark<E, S>
 where
     E: PairingEngine<Fq = F, G1Affine = GroupAffine<P>>,
     F: RescueParameter + SWToTEConParam,
     P: SWModelParameters<BaseField = F>,
+    S: PolynomialCommitmentScheme<E>,
 {
     #[allow(clippy::new_without_default)]
     /// A new Plonk KZG SNARK
@@ -60,11 +58,12 @@ where
     pub fn batch_prove<C, R, T>(
         prng: &mut R,
         circuits: &[&C],
-        prove_keys: &[&ProvingKey<E>],
+        prove_keys: &[&ProvingKey<E, S>],
     ) -> Result<BatchProof<E>, PlonkError>
     where
         C: Arithmetization<E::Fr>,
         R: CryptoRng + RngCore,
+        S: PolynomialCommitmentScheme<E>,
         T: PlonkTranscript<F>,
     {
         let (batch_proof, ..) =
@@ -162,7 +161,7 @@ where
     fn batch_prove_internal<C, R, T>(
         prng: &mut R,
         circuits: &[&C],
-        prove_keys: &[&ProvingKey<E>],
+        prove_keys: &[&ProvingKey<E, S>],
         extra_transcript_init_msg: Option<Vec<u8>>,
     ) -> Result<(BatchProof<E>, Vec<Oracles<E::Fr>>, Challenges<E::Fr>), PlonkError>
     where
@@ -417,23 +416,25 @@ where
     }
 }
 
-impl<E, F, P> UniversalSNARK<E> for PlonkKzgSnark<E>
+impl<E, F, P, S> UniversalSNARK<E> for PlonkKzgSnark<E, S>
 where
     E: PairingEngine<Fq = F, G1Affine = GroupAffine<P>>,
+
     F: RescueParameter + SWToTEConParam,
     P: SWModelParameters<BaseField = F>,
+    S: PolynomialCommitmentScheme<E>,
 {
     type Proof = Proof<E>;
-    type ProvingKey = ProvingKey<E>;
+    type ProvingKey = ProvingKey<E, S>;
     type VerifyingKey = VerifyingKey<E>;
-    type UniversalSRS = UniversalSrs<E>;
+    type UniversalSRS = UniversalSrs<E, S>;
     type Error = PlonkError;
 
     fn universal_setup<R: RngCore + CryptoRng>(
         max_degree: usize,
         rng: &mut R,
-    ) -> Result<Self::UniversalSRS, Self::Error> {
-        UnivariateKzgPCS::<E>::gen_srs_for_testing(rng, max_degree).map_err(PlonkError::PCSError)
+    ) -> Result<S::SRS, Self::Error> {
+        S::gen_srs_for_testing(rng, max_degree).map_err(PlonkError::PCSError)
     }
 
     /// Input a circuit and the SRS, precompute the proving key and verification
@@ -472,12 +473,12 @@ where
         // 2. Compute VerifyingKey
         let (commit_key, open_key) = srs.trim(srs_size)?;
         let selector_comms = parallelizable_slice_iter(&selectors_polys)
-            .map(|poly| UnivariateKzgPCS::commit(&commit_key, poly).map_err(PlonkError::PCSError))
+            .map(|poly| S::commit(&commit_key, poly).map_err(PlonkError::PCSError))
             .collect::<Result<Vec<_>, PlonkError>>()?
             .into_iter()
             .collect();
         let sigma_comms = parallelizable_slice_iter(&sigma_polys)
-            .map(|poly| UnivariateKzgPCS::commit(&commit_key, poly).map_err(PlonkError::PCSError))
+            .map(|poly| S::commit(&commit_key, poly).map_err(PlonkError::PCSError))
             .collect::<Result<Vec<_>, PlonkError>>()?
             .into_iter()
             .collect();
@@ -486,19 +487,19 @@ where
         let plookup_vk = match circuit.support_lookup() {
             false => None,
             true => Some(PlookupVerifyingKey {
-                range_table_comm: UnivariateKzgPCS::commit(
+                range_table_comm: S::commit(
                     &commit_key,
                     &plookup_pk.as_ref().unwrap().range_table_poly,
                 )?,
-                key_table_comm: UnivariateKzgPCS::commit(
+                key_table_comm: S::commit(
                     &commit_key,
                     &plookup_pk.as_ref().unwrap().key_table_poly,
                 )?,
-                table_dom_sep_comm: UnivariateKzgPCS::commit(
+                table_dom_sep_comm: S::commit(
                     &commit_key,
                     &plookup_pk.as_ref().unwrap().table_dom_sep_poly,
                 )?,
-                q_dom_sep_comm: UnivariateKzgPCS::commit(
+                q_dom_sep_comm: S::commit(
                     &commit_key,
                     &plookup_pk.as_ref().unwrap().q_dom_sep_poly,
                 )?,
@@ -1185,7 +1186,7 @@ pub mod test {
     fn check_plonk_prover_polynomials<E: PairingEngine>(
         plonk_type: PlonkType,
         oracles: &Oracles<E::Fr>,
-        pk: &ProvingKey<E>,
+        pk: &ProvingKey<E, UnivariateKzgPCS<E>>,
         challenges: &Challenges<E::Fr>,
     ) -> Result<(), PlonkError> {
         check_circuit_polynomial_on_vanishing_set(oracles, pk)?;
@@ -1199,7 +1200,7 @@ pub mod test {
 
     fn check_circuit_polynomial_on_vanishing_set<E: PairingEngine>(
         oracles: &Oracles<E::Fr>,
-        pk: &ProvingKey<E>,
+        pk: &ProvingKey<E, UnivariateKzgPCS<E>>,
     ) -> Result<(), PlonkError> {
         let q_lc: Vec<&DensePolynomial<E::Fr>> =
             (0..GATE_WIDTH).map(|j| &pk.selectors[j]).collect();
@@ -1268,7 +1269,7 @@ pub mod test {
 
     fn check_perm_polynomials_on_vanishing_set<E: PairingEngine>(
         oracles: &Oracles<E::Fr>,
-        pk: &ProvingKey<E>,
+        pk: &ProvingKey<E, UnivariateKzgPCS<E>>,
         challenges: &Challenges<E::Fr>,
     ) -> Result<(), PlonkError> {
         let beta = challenges.beta;
@@ -1319,7 +1320,7 @@ pub mod test {
 
     fn check_lookup_polynomials_on_vanishing_set<E: PairingEngine>(
         oracles: &Oracles<E::Fr>,
-        pk: &ProvingKey<E>,
+        pk: &ProvingKey<E, UnivariateKzgPCS<E>>,
         challenges: &Challenges<E::Fr>,
     ) -> Result<(), PlonkError> {
         let beta = challenges.beta;
@@ -1618,7 +1619,7 @@ pub mod test {
     fn check_batch_prove_and_verify<E, F, P, R, T>(
         rng: &mut R,
         cs_ref: &[&PlonkCircuit<E::Fr>],
-        pks_ref: &[&ProvingKey<E>],
+        pks_ref: &[&ProvingKey<E, UnivariateKzgPCS<E>>],
         vks_ref: &[&VerifyingKey<E>],
     ) -> Result<(), PlonkError>
     where

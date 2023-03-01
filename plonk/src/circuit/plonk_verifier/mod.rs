@@ -331,7 +331,7 @@ mod test {
     use ark_bls12_377::{g1::Parameters as Param377, Bls12_377, Fq as Fq377};
     use ark_ec::{ProjectiveCurve, SWModelParameters, TEModelParameters};
     use ark_std::{test_rng, vec, UniformRand};
-    use jf_primitives::rescue::RescueParameter;
+    use jf_primitives::{pcs::prelude::UnivariateKzgPCS, rescue::RescueParameter};
     use jf_relation::{
         gadgets::{ecc::Point, test_utils::test_variable_independence_for_circuit},
         Circuit, MergeableCircuitType,
@@ -356,7 +356,7 @@ mod test {
         let rng = &mut test_rng();
         let n = 32;
         let max_degree = n + 2;
-        let srs = PlonkKzgSnark::<E>::universal_setup(max_degree, rng)?;
+        let srs = PlonkKzgSnark::<E, UnivariateKzgPCS<E>>::universal_setup(max_degree, rng)?;
 
         // Setup instances and create verifying keys
         let mut vks_type_a = vec![];
@@ -368,8 +368,11 @@ mod test {
                 i,
                 MergeableCircuitType::TypeA,
             )?;
-            let instance =
-                BatchArgument::setup_instance(&srs, circuit, MergeableCircuitType::TypeA)?;
+            let instance = BatchArgument::setup_instance::<UnivariateKzgPCS<_>>(
+                &srs,
+                circuit,
+                MergeableCircuitType::TypeA,
+            )?;
             vks_type_a.push(instance.verify_key_ref().clone());
 
             let circuit = new_mergeable_circuit_for_test::<E>(
@@ -377,8 +380,11 @@ mod test {
                 i,
                 MergeableCircuitType::TypeB,
             )?;
-            let instance =
-                BatchArgument::setup_instance(&srs, circuit, MergeableCircuitType::TypeB)?;
+            let instance = BatchArgument::setup_instance::<UnivariateKzgPCS<_>>(
+                &srs,
+                circuit,
+                MergeableCircuitType::TypeB,
+            )?;
             vks_type_b.push(instance.verify_key_ref().clone());
         }
         // Compute merged verifying keys
@@ -477,7 +483,7 @@ mod test {
             // 1. Simulate universal setup
             let n = 1 << log_circuit_size;
             let max_degree = n + 2;
-            let srs = PlonkKzgSnark::<E>::universal_setup(max_degree, rng)?;
+            let srs = PlonkKzgSnark::<E, UnivariateKzgPCS<_>>::universal_setup(max_degree, rng)?;
 
             // 2. Setup instances
             let shared_public_input = E::Fr::rand(rng);
@@ -503,8 +509,11 @@ mod test {
                 instances_type_b.push(instance);
             }
             // 3. Batch Proving
-            let batch_proof =
-                BatchArgument::batch_prove::<_, T>(rng, &instances_type_a, &instances_type_b)?;
+            let batch_proof = BatchArgument::batch_prove::<_, UnivariateKzgPCS<_>, T>(
+                rng,
+                &instances_type_a,
+                &instances_type_b,
+            )?;
 
             // 4. Aggregate verification keys
             let vks_type_a: Vec<&VerifyingKey<E>> = instances_type_a
@@ -763,7 +772,7 @@ mod test {
         // 1. Simulate universal setup
         let n = 1 << i;
         let max_degree = n + 2;
-        let srs = PlonkKzgSnark::<E>::universal_setup(max_degree, rng)?;
+        let srs = PlonkKzgSnark::<E, UnivariateKzgPCS<_>>::universal_setup(max_degree, rng)?;
 
         for _ in 0..2 {
             // =======================================
@@ -794,8 +803,11 @@ mod test {
             instances_type_b.push(instance);
 
             // 3. Batch Proving
-            let batch_proof =
-                BatchArgument::batch_prove::<_, T>(rng, &instances_type_a, &instances_type_b)?;
+            let batch_proof = BatchArgument::batch_prove::<_, UnivariateKzgPCS<_>, T>(
+                rng,
+                &instances_type_a,
+                &instances_type_b,
+            )?;
 
             // 4. Aggregate verification keys
             let vks_type_a: Vec<&VerifyingKey<E>> = instances_type_a

@@ -462,30 +462,40 @@ mod test {
     use ark_bls12_377::{g1::Parameters as Param377, Bls12_377};
     use ark_ec::{SWModelParameters, TEModelParameters};
     use ark_std::{test_rng, vec, UniformRand};
-    use jf_primitives::rescue::RescueParameter;
+    use jf_primitives::{
+        pcs::{prelude::UnivariateKzgPCS, PolynomialCommitmentScheme},
+        rescue::RescueParameter,
+    };
     use jf_relation::{Circuit, MergeableCircuitType};
     use jf_utils::field_switching;
 
     const RANGE_BIT_LEN_FOR_TEST: usize = 16;
     #[test]
     fn test_compute_challenges_vars_circuit() -> Result<(), CircuitError> {
-        test_compute_challenges_vars_circuit_helper::<Bls12_377, _, _, Param377, RescueTranscript<_>>(
-        )
+        test_compute_challenges_vars_circuit_helper::<
+            Bls12_377,
+            _,
+            _,
+            Param377,
+            UnivariateKzgPCS<_>,
+            RescueTranscript<_>,
+        >()
     }
 
-    fn test_compute_challenges_vars_circuit_helper<E, F, P, Q, T>() -> Result<(), CircuitError>
+    fn test_compute_challenges_vars_circuit_helper<E, F, P, Q, S, T>() -> Result<(), CircuitError>
     where
         E: PairingEngine<Fq = F, G1Affine = GroupAffine<P>>,
         F: RescueParameter + SWToTEConParam,
         P: SWModelParameters<BaseField = F> + TEModelParameters,
         Q: TEParam<BaseField = F>,
+        S: PolynomialCommitmentScheme<E>,
         T: PlonkTranscript<F>,
     {
         // 1. Simulate universal setup
         let rng = &mut test_rng();
         let n = 128;
         let max_degree = n + 2;
-        let srs = PlonkKzgSnark::<E>::universal_setup(max_degree, rng)?;
+        let srs = PlonkKzgSnark::<E, S>::universal_setup(max_degree, rng)?;
 
         // 2. Setup instances
         let shared_public_input = E::Fr::rand(rng);
@@ -512,7 +522,7 @@ mod test {
         }
         // 3. Batch Proving
         let batch_proof =
-            BatchArgument::batch_prove::<_, T>(rng, &instances_type_a, &instances_type_b)?;
+            BatchArgument::batch_prove::<_, _, T>(rng, &instances_type_a, &instances_type_b)?;
 
         // 4. Aggregate verification keys
         let vks_type_a: Vec<&VerifyingKey<E>> = instances_type_a

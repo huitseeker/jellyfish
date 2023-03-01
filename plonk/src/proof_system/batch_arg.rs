@@ -24,7 +24,7 @@ use ark_std::{
     vec,
     vec::Vec,
 };
-use jf_primitives::rescue::RescueParameter;
+use jf_primitives::{pcs::PolynomialCommitmentScheme, rescue::RescueParameter};
 use jf_relation::{gadgets::ecc::SWToTEConParam, Circuit, MergeableCircuitType, PlonkCircuit};
 use jf_utils::multi_pairing;
 
@@ -34,14 +34,14 @@ pub struct BatchArgument<E: PairingEngine>(PhantomData<E>);
 /// A circuit instance that consists of the corresponding proving
 /// key/verification key/circuit.
 #[derive(Clone)]
-pub struct Instance<E: PairingEngine> {
+pub struct Instance<E: PairingEngine, S: PolynomialCommitmentScheme<E>> {
     // TODO: considering giving instance an ID
-    prove_key: ProvingKey<E>, // the verification key can be obtained inside the proving key.
+    prove_key: ProvingKey<E, S>, // the verification key can be obtained inside the proving key.
     circuit: PlonkCircuit<E::Fr>,
     _circuit_type: MergeableCircuitType,
 }
 
-impl<E: PairingEngine> Instance<E> {
+impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> Instance<E, S> {
     /// Get verification key by reference.
     pub fn verify_key_ref(&self) -> &VerifyingKey<E> {
         &self.prove_key.vk
@@ -60,11 +60,11 @@ where
     P: SWModelParameters<BaseField = F>,
 {
     /// Setup the circuit and the proving key for a (mergeable) instance.
-    pub fn setup_instance(
-        srs: &UniversalSrs<E>,
+    pub fn setup_instance<S: PolynomialCommitmentScheme<E>>(
+        srs: &UniversalSrs<E, S>,
         mut circuit: PlonkCircuit<E::Fr>,
         circuit_type: MergeableCircuitType,
-    ) -> Result<Instance<E>, PlonkError> {
+    ) -> Result<Instance<E, S>, PlonkError> {
         circuit.finalize_for_mergeable_circuit(circuit_type)?;
         let (prove_key, _) = PlonkKzgSnark::preprocess(srs, &circuit)?;
         Ok(Instance {
@@ -75,13 +75,14 @@ where
     }
 
     /// Prove satisfiability of multiple instances in a batch.
-    pub fn batch_prove<R, T>(
+    pub fn batch_prove<R, S, T>(
         prng: &mut R,
-        instances_type_a: &[Instance<E>],
-        instances_type_b: &[Instance<E>],
+        instances_type_a: &[Instance<E, S>],
+        instances_type_b: &[Instance<E, S>],
     ) -> Result<BatchProof<E>, PlonkError>
     where
         R: CryptoRng + RngCore,
+        S: PolynomialCommitmentScheme<E>,
         T: PlonkTranscript<F>,
     {
         if instances_type_a.len() != instances_type_b.len() {
@@ -102,7 +103,7 @@ where
             .zip(instances_type_b.iter())
             .map(|(pred_a, pred_b)| pred_a.circuit.merge(&pred_b.circuit))
             .collect::<Result<Vec<_>, _>>()?;
-        let pks_ref: Vec<&ProvingKey<E>> = pks.iter().collect();
+        let pks_ref: Vec<&ProvingKey<E, S>> = pks.iter().collect();
         let circuits_ref: Vec<&PlonkCircuit<E::Fr>> = circuits.iter().collect();
 
         PlonkKzgSnark::batch_prove::<_, _, T>(prng, &circuits_ref, &pks_ref)
@@ -235,9 +236,9 @@ pub(crate) fn new_mergeable_circuit_for_test<E: PairingEngine>(
 /// Create `num_instances` type A/B instance verifying keys and
 /// compute the corresponding batch proof. Only used for testing.
 #[allow(clippy::type_complexity)]
-pub fn build_batch_proof_and_vks_for_test<E, F, P, R, T>(
+pub fn build_batch_proof_and_vks_for_test<E, F, P, R, S, T>(
     rng: &mut R,
-    srs: &UniversalSrs<E>,
+    srs: &S::SRS,
     num_instances: usize,
     shared_public_input: E::Fr,
 ) -> Result<(BatchProof<E>, Vec<VerifyingKey<E>>, Vec<VerifyingKey<E>>), PlonkError>
@@ -246,6 +247,7 @@ where
     F: RescueParameter + SWToTEConParam,
     P: SWModelParameters<BaseField = F>,
     R: CryptoRng + RngCore,
+    S: PolynomialCommitmentScheme<E>,
     T: PlonkTranscript<F>,
 {
     let mut instances_type_a = vec![];
@@ -273,7 +275,7 @@ where
     }
 
     let batch_proof =
-        BatchArgument::batch_prove::<_, T>(rng, &instances_type_a, &instances_type_b)?;
+        BatchArgument::batch_prove::<_, S, T>(rng, &instances_type_a, &instances_type_b)?;
     Ok((batch_proof, vks_type_a, vks_type_b))
 }
 
@@ -283,6 +285,7 @@ mod test {
     use crate::transcript::RescueTranscript;
     use ark_bls12_377::{Bls12_377, Fq as Fq377};
     use ark_std::{test_rng, UniformRand};
+    use jf_primitives::pcs::prelude::UnivariateKzgPCS;
 
     #[test]
     fn test_batch_argument() -> Result<(), PlonkError> {
@@ -300,7 +303,7 @@ mod test {
         let rng = &mut test_rng();
         let n = 128;
         let max_degree = n + 2;
-        let srs = PlonkKzgSnark::<E>::universal_setup(max_degree, rng)?;
+        let srs = PlonkKzgSnark::<E, UnivariateKzgPCS<E>>::universal_setup(max_degree, rng)?;
 
         // 2. Setup instances
         let shared_public_input = E::Fr::rand(rng);
@@ -327,14 +330,19 @@ mod test {
         }
 
         // 3. Batch Proving
-        let batch_proof =
-            BatchArgument::batch_prove::<_, T>(rng, &instances_type_a, &instances_type_b)?;
+        let batch_proof = BatchArgument::batch_prove::<_, UnivariateKzgPCS<_>, T>(
+            rng,
+            &instances_type_a,
+            &instances_type_b,
+        )?;
         // error path: inconsistent length between instances_type_a and
         // instances_type_b
-        assert!(
-            BatchArgument::batch_prove::<_, T>(rng, &instances_type_a[1..], &instances_type_b)
-                .is_err()
-        );
+        assert!(BatchArgument::batch_prove::<_, UnivariateKzgPCS<_>, T>(
+            rng,
+            &instances_type_a[1..],
+            &instances_type_b
+        )
+        .is_err());
 
         // 4. Aggregate verification keys
         let vks_type_a: Vec<&VerifyingKey<E>> = instances_type_a
