@@ -55,6 +55,11 @@ impl<
 {
 }
 
+/// This trait defines the max degree supported by an SRS
+pub trait WithMaxDegree {
+    /// Returns the max degree supported by the SRS
+    fn max_degree(&self) -> usize;
+}
 /// This trait defines APIs for polynomial commitment schemes.
 /// Note that for our usage, this PCS is not hiding.
 /// TODO(#187): add hiding property.
@@ -76,7 +81,7 @@ pub trait PolynomialCommitmentScheme<E: PairingEngine> {
         + Eq
         + Sync;
     /// Structured reference string
-    type SRS: Clone + Debug;
+    type SRS: Clone + Debug + WithMaxDegree;
     /// Polynomial and its associated types
     type Polynomial: Clone
         + Debug

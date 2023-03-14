@@ -789,8 +789,9 @@ pub struct PlookupVerifyingKey<E: PairingEngine> {
 impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> VerifyingKey<E, S> {
     /// Create a dummy TurboPlonk verification key for a circuit with
     /// `num_inputs` public inputs and domain size `domain_size`.
-    pub fn dummy(num_inputs: usize, domain_size: usize) -> Self 
-        where <S as PolynomialCommitmentScheme<E>>::VerifierParam: Default
+    pub fn dummy(num_inputs: usize, domain_size: usize) -> Self
+    where
+        <S as PolynomialCommitmentScheme<E>>::VerifierParam: Default,
     {
         let num_wire_types = GATE_WIDTH + 1;
         Self {
@@ -849,7 +850,7 @@ impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> VerifyingKey<E, S> {
             sigma_comms,
             selector_comms,
             k: self.k.clone(),
-            open_key: self.open_key,
+            open_key: self.open_key.clone(),
             plookup_vk: None,
             is_merged: true,
         })

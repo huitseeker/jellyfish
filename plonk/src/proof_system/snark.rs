@@ -30,7 +30,11 @@ use ark_std::{
     vec,
     vec::Vec,
 };
-use jf_primitives::{pcs::PolynomialCommitmentScheme, pcs::UVPCS, rescue::RescueParameter};
+use jf_primitives::{
+    pcs::PolynomialCommitmentScheme,
+    pcs::{WithMaxDegree, UVPCS},
+    rescue::RescueParameter,
+};
 use jf_relation::{
     constants::compute_coset_representatives, gadgets::ecc::SWToTEConParam, Arithmetization,
 };
@@ -447,7 +451,7 @@ where
         let domain_size = circuit.eval_domain_size()?;
         let srs_size = circuit.srs_size()?;
         let num_inputs = circuit.num_inputs();
-        if srs.max_degree() < circuit.srs_size()? {
+        if WithMaxDegree::max_degree(srs) < circuit.srs_size()? {
             return Err(PlonkError::IndexTooLarge);
         }
         // 1. Compute selector and permutation polynomials.
