@@ -27,14 +27,14 @@ use ark_std::{
     vec,
     vec::Vec,
 };
-use jf_primitives::pcs::{prelude::Commitment, PolynomialCommitmentScheme};
+use jf_primitives::pcs::{prelude::Commitment, UVPCS};
 use jf_relation::{constants::GATE_WIDTH, Arithmetization};
 use jf_utils::par_utils::parallelizable_slice_iter;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-type CommitmentsAndPolys<E, S: PolynomialCommitmentScheme<E>> = (
-    S::BatchCommitment,
+type CommitmentsAndPolys<E> = (
+    Vec<Commitment<E>>,
     Vec<DensePolynomial<<E as PairingEngine>::Fr>>,
 );
 
@@ -45,7 +45,7 @@ pub(crate) struct Prover<E: PairingEngine, S> {
     _phantom: PhantomData<S>,
 }
 
-impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> Prover<E, S> {
+impl<E: PairingEngine, S: UVPCS<E>> Prover<E, S> {
     /// Construct a Plonk prover that uses a domain with size `domain_size` and
     /// quotient polynomial domain with a size that is larger than the degree of
     /// the quotient polynomial.
@@ -75,7 +75,7 @@ impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> Prover<E, S> {
         prng: &mut R,
         ck: &CommitKey<E, S>,
         cs: &C,
-    ) -> Result<(CommitmentsAndPolys<E, S>, DensePolynomial<E::Fr>), PlonkError> {
+    ) -> Result<(CommitmentsAndPolys<E>, DensePolynomial<E::Fr>), PlonkError> {
         let wire_polys: Vec<DensePolynomial<E::Fr>> = cs
             .compute_wire_polynomials()?
             .into_iter()
@@ -98,7 +98,7 @@ impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> Prover<E, S> {
         ck: &CommitKey<E, S>,
         cs: &C,
         tau: E::Fr,
-    ) -> Result<(CommitmentsAndPolys<E, S>, Vec<E::Fr>, Vec<E::Fr>), PlonkError> {
+    ) -> Result<(CommitmentsAndPolys<E>, Vec<E::Fr>, Vec<E::Fr>), PlonkError> {
         let merged_lookup_table = cs.compute_merged_lookup_table(tau)?;
         let (sorted_vec, h_1_poly, h_2_poly) =
             cs.compute_lookup_sorted_vec_polynomials(tau, &merged_lookup_table)?;
@@ -171,7 +171,7 @@ impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> Prover<E, S> {
         challenges: &Challenges<E::Fr>,
         online_oracles: &[Oracles<E::Fr>],
         num_wire_types: usize,
-    ) -> Result<CommitmentsAndPolys<E, S>, PlonkError> {
+    ) -> Result<CommitmentsAndPolys<E>, PlonkError> {
         let quot_poly =
             self.compute_quotient_polynomial(challenges, pks, online_oracles, num_wire_types)?;
         let split_quot_polys = self.split_quotient_polynomial(prng, &quot_poly, num_wire_types)?;
@@ -399,7 +399,8 @@ impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> Prover<E, S> {
 }
 
 /// Private helper methods
-impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> Prover<E, S> {
+impl<E: PairingEngine, S: UVPCS<E>> Prover<E, S>
+{
     /// Return the list of plookup polynomials to be opened at point `zeta`
     /// The order should be consistent with the verifier side.
     #[inline]
@@ -445,8 +446,8 @@ impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> Prover<E, S> {
         poly: DensePolynomial<E::Fr>,
         hiding_bound: usize,
     ) -> DensePolynomial<E::Fr> {
-        let mask_poly =
-            DensePolynomial::rand(hiding_bound, prng).mul_by_vanishing_poly(self.domain);
+        let mask_poly = <DensePolynomial<E::Fr> as UVPolynomial<E::Fr>>::rand(hiding_bound, prng)
+            .mul_by_vanishing_poly(self.domain);
         mask_poly + poly
     }
 
@@ -1097,6 +1098,7 @@ mod test {
     use ark_bn254::Bn254;
     use ark_bw6_761::BW6_761;
     use ark_std::test_rng;
+    use jf_primitives::pcs::prelude::UnivariateKzgPCS;
 
     #[test]
     fn test_split_quotient_polynomial_wrong_degree() -> Result<(), PlonkError> {
@@ -1108,9 +1110,9 @@ mod test {
 
     fn test_split_quotient_polynomial_wrong_degree_helper<E: PairingEngine>(
     ) -> Result<(), PlonkError> {
-        let prover = Prover::<E>::new(4, GATE_WIDTH + 1)?;
+        let prover = Prover::<E, UnivariateKzgPCS<E>>::new(4, GATE_WIDTH + 1)?;
         let rng = &mut test_rng();
-        let bad_quot_poly = DensePolynomial::<E::Fr>::rand(25, rng);
+        let bad_quot_poly = <DensePolynomial<E::Fr> as UVPolynomial<E::Fr>>::rand(25, rng);
         assert!(prover
             .split_quotient_polynomial(rng, &bad_quot_poly, GATE_WIDTH + 1)
             .is_err());

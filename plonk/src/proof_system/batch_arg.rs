@@ -24,7 +24,10 @@ use ark_std::{
     vec,
     vec::Vec,
 };
-use jf_primitives::{pcs::PolynomialCommitmentScheme, rescue::RescueParameter};
+use jf_primitives::{
+    pcs::{PolynomialCommitmentScheme, UVPCS},
+    rescue::RescueParameter,
+};
 use jf_relation::{gadgets::ecc::SWToTEConParam, Circuit, MergeableCircuitType, PlonkCircuit};
 use jf_utils::multi_pairing;
 
@@ -43,7 +46,7 @@ pub struct Instance<E: PairingEngine, S: PolynomialCommitmentScheme<E>> {
 
 impl<E: PairingEngine, S: PolynomialCommitmentScheme<E>> Instance<E, S> {
     /// Get verification key by reference.
-    pub fn verify_key_ref(&self) -> &VerifyingKey<E> {
+    pub fn verify_key_ref(&self) -> &VerifyingKey<E, S> {
         &self.prove_key.vk
     }
 
@@ -60,7 +63,7 @@ where
     P: SWModelParameters<BaseField = F>,
 {
     /// Setup the circuit and the proving key for a (mergeable) instance.
-    pub fn setup_instance<S: PolynomialCommitmentScheme<E>>(
+    pub fn setup_instance<S: UVPCS<E>>(
         srs: &UniversalSrs<E, S>,
         mut circuit: PlonkCircuit<E::Fr>,
         circuit_type: MergeableCircuitType,
@@ -82,7 +85,7 @@ where
     ) -> Result<BatchProof<E>, PlonkError>
     where
         R: CryptoRng + RngCore,
-        S: PolynomialCommitmentScheme<E>,
+        S: UVPCS<E>,
         T: PlonkTranscript<F>,
     {
         if instances_type_a.len() != instances_type_b.len() {
@@ -111,10 +114,10 @@ where
 
     /// Partially verify a batched proof without performing the pairing. Return
     /// the two group elements used in the final pairing.
-    pub fn partial_verify<T>(
+    pub fn partial_verify<T, S: PolynomialCommitmentScheme<E>>(
         beta_g: &E::G1Affine,
         generator_g: &E::G1Affine,
-        merged_vks: &[VerifyingKey<E>],
+        merged_vks: &[VerifyingKey<E, S>],
         shared_public_input: &[E::Fr],
         batch_proof: &BatchProof<E>,
         blinding_factor: E::Fr,
@@ -147,9 +150,13 @@ where
         // we need to copy the public input once after merging the circuit
         let shared_public_input = [shared_public_input, shared_public_input].concat();
         let public_inputs = vec![&shared_public_input[..]; merged_vks.len()];
-        let merged_vks_ref: Vec<&VerifyingKey<E>> = merged_vks.iter().collect();
-        let pcs_info =
-            verifier.prepare_pcs_info::<T>(&merged_vks_ref, &public_inputs, batch_proof, &None)?;
+        let merged_vks_ref: Vec<&VerifyingKey<E, S>> = merged_vks.iter().collect();
+        let pcs_info = verifier.prepare_pcs_info::<T, S>(
+            &merged_vks_ref,
+            &public_inputs,
+            batch_proof,
+            &None,
+        )?;
 
         // inner1 = [open_proof] + u * [shifted_open_proof] + blinding_factor * [1]1
         let mut scalars_and_bases = ScalarsAndBases::<E>::new();
@@ -180,10 +187,10 @@ where
     E: PairingEngine,
 {
     /// Aggregate verification keys
-    pub fn aggregate_verify_keys(
-        vks_type_a: &[&VerifyingKey<E>],
-        vks_type_b: &[&VerifyingKey<E>],
-    ) -> Result<Vec<VerifyingKey<E>>, PlonkError> {
+    pub fn aggregate_verify_keys<S: PolynomialCommitmentScheme<E>>(
+        vks_type_a: &[&VerifyingKey<E, S>],
+        vks_type_b: &[&VerifyingKey<E, S>],
+    ) -> Result<Vec<VerifyingKey<E, S>>, PlonkError> {
         if vks_type_a.len() != vks_type_b.len() {
             return Err(ParameterError(format!(
                 "the number of type A verification keys {} is different from the number of type B verification keys {}.", 
@@ -199,8 +206,8 @@ where
     }
 
     /// Perform the final pairing to verify the proof.
-    pub fn decide(
-        open_key: &OpenKey<E>,
+    pub fn decide<S: UVPCS<E>>(
+        open_key: &OpenKey<E, S>,
         inner1: E::G1Projective,
         inner2: E::G1Projective,
     ) -> Result<bool, PlonkError> {
@@ -241,13 +248,20 @@ pub fn build_batch_proof_and_vks_for_test<E, F, P, R, S, T>(
     srs: &S::SRS,
     num_instances: usize,
     shared_public_input: E::Fr,
-) -> Result<(BatchProof<E>, Vec<VerifyingKey<E>>, Vec<VerifyingKey<E>>), PlonkError>
+) -> Result<
+    (
+        BatchProof<E>,
+        Vec<VerifyingKey<E, S>>,
+        Vec<VerifyingKey<E, S>>,
+    ),
+    PlonkError,
+>
 where
     E: PairingEngine<Fq = F, G1Affine = GroupAffine<P>>,
     F: RescueParameter + SWToTEConParam,
     P: SWModelParameters<BaseField = F>,
     R: CryptoRng + RngCore,
-    S: PolynomialCommitmentScheme<E>,
+    S: UVPCS<E>,
     T: PlonkTranscript<F>,
 {
     let mut instances_type_a = vec![];
@@ -345,11 +359,11 @@ mod test {
         .is_err());
 
         // 4. Aggregate verification keys
-        let vks_type_a: Vec<&VerifyingKey<E>> = instances_type_a
+        let vks_type_a: Vec<&VerifyingKey<E, UnivariateKzgPCS<E>>> = instances_type_a
             .iter()
             .map(|pred| pred.verify_key_ref())
             .collect();
-        let vks_type_b: Vec<&VerifyingKey<E>> = instances_type_b
+        let vks_type_b: Vec<&VerifyingKey<E, UnivariateKzgPCS<E>>> = instances_type_b
             .iter()
             .map(|pred| pred.verify_key_ref())
             .collect();
@@ -361,7 +375,7 @@ mod test {
         let open_key_ref = &vks_type_a[0].open_key;
         let beta_g_ref = &srs.powers_of_g[1];
         let blinding_factor = E::Fr::rand(rng);
-        let (inner1, inner2) = BatchArgument::partial_verify::<T>(
+        let (inner1, inner2) = BatchArgument::partial_verify::<T, UnivariateKzgPCS<E>>(
             beta_g_ref,
             &open_key_ref.g,
             &merged_vks,
@@ -369,10 +383,14 @@ mod test {
             &batch_proof,
             blinding_factor,
         )?;
-        assert!(BatchArgument::decide(open_key_ref, inner1, inner2)?);
+        assert!(BatchArgument::decide::<UnivariateKzgPCS<E>>(
+            open_key_ref,
+            inner1,
+            inner2
+        )?);
         // error paths
         // empty merged_vks
-        assert!(BatchArgument::partial_verify::<T>(
+        assert!(BatchArgument::partial_verify::<T, UnivariateKzgPCS<E>>(
             beta_g_ref,
             &open_key_ref.g,
             &[],
@@ -382,7 +400,7 @@ mod test {
         )
         .is_err());
         // the number of vks is different the number of instances
-        assert!(BatchArgument::partial_verify::<T>(
+        assert!(BatchArgument::partial_verify::<T, UnivariateKzgPCS<E>>(
             beta_g_ref,
             &open_key_ref.g,
             &merged_vks[1..],
@@ -394,7 +412,7 @@ mod test {
         // inconsistent domain size between verification keys
         let mut bad_merged_vks = merged_vks;
         bad_merged_vks[0].domain_size /= 2;
-        assert!(BatchArgument::partial_verify::<T>(
+        assert!(BatchArgument::partial_verify::<T, UnivariateKzgPCS<E>>(
             beta_g_ref,
             &open_key_ref.g,
             &bad_merged_vks,
